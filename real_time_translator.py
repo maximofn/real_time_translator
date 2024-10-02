@@ -114,7 +114,6 @@ def list_sink_inputs():
             if sink_input_app_name.startswith(' '):
                 sink_input_app_name = sink_input_app_name[1:]
             for j in range(i, max(-1, i - num_previous_lines), -1):  # Find the sink input ID in the previous lines
-                print(f"\tj: {j}, lines[j]: {lines[j]}")
                 if "Sink Input" in lines[j]:
                     sink_input_id = lines[j].split("#")[1].strip()
                     sink_input = {"id": sink_input_id, "name": sink_input_app_name}
@@ -173,7 +172,8 @@ def main():
     recorder.dynamic_energy_threshold = False
 
     # Load transcriber model
-    transcriber = Whisper(model_size="tiny")
+    print("Loading model...")
+    transcriber = Whisper(model_size="small.en")
 
     record_timeout = 2 # TODO args.record_timeout
     phrase_timeout = 3 # TODO args.phrase_timeout
@@ -199,12 +199,16 @@ def main():
     # Cue the user that we're ready to go.
     print("Model loaded.\n")
 
+    print_start = True
+
     while True:
+        if print_start:
+            print("Recording...")
+            print_start = False
         try:
             now = datetime.utcnow()
             # Pull raw recorded audio from the queue.
             if not data_queue.empty():
-                print("Data queue not empty")
                 phrase_complete = False
                 # If enough time has passed between recordings, consider the phrase complete.
                 # Clear the current working audio buffer to start over with the new data.
@@ -234,14 +238,14 @@ def main():
                     transcription[-1] = text
 
                 # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
+                # os.system('cls' if os.name=='nt' else 'clear')
                 for line in transcription:
                     print(line)
                 # Flush stdout.
                 print('', end='', flush=True)
             else:
                 # Infinite loops are bad for processors, must sleep.
-                sleep(0.25)
+                sleep(0.001)
         except KeyboardInterrupt:
             break
 
