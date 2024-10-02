@@ -4,11 +4,13 @@ import warnings
 import speech_recognition as sr
 from queue import Queue
 from whisper_model import Whisper
+from llama_3_1_1B import Llama_3_1_1B
 from datetime import datetime, timedelta
 import numpy as np
 import torch
 import os
 from time import sleep
+import pyaudio
 
 LINUX = "linux"
 WINDOWS = "windows"
@@ -21,15 +23,15 @@ def check_for_dependencies(operating_system):
     # Check for system dependencies
     if operating_system == LINUX:
         # Check for pulseaudio
-        process = subprocess.run(['which', 'pulseaudio'], capture_output=True, text=True)
-        output = process.stdout.strip()
-        if output:
-            if "pulseaudio" not in output:
-                warnings.warn("Pulseaudio not found. Please install pulseaudio with 'sudo apt install pulseaudio'")
-                return False
-        else:
-            warnings.warn("Pulseaudio not found. Please install pulseaudio with 'sudo apt install pulseaudio'")
-            return False
+        # process = subprocess.run(['which', 'pulseaudio'], capture_output=True, text=True)
+        # output = process.stdout.strip()
+        # if output:
+        #     if "pulseaudio" not in output:
+        #         warnings.warn("Pulseaudio not found. Please install pulseaudio with 'sudo apt install pulseaudio'")
+        #         return False
+        # else:
+        #     warnings.warn("Pulseaudio not found. Please install pulseaudio with 'sudo apt install pulseaudio'")
+        #     return False
         
         # Check for pavucontrol
         process = subprocess.run(['which', 'pavucontrol'], capture_output=True, text=True)
@@ -41,6 +43,8 @@ def check_for_dependencies(operating_system):
         else:
             warnings.warn("Pavucontrol not found. Please install pavucontrol with 'sudo apt install pavucontrol'")
             return False
+        
+        # TODO libasound2-plugins libasound2-dev libpulse-dev pulseaudio python3-pyaudio pipewire-alsa
     elif operating_system == WINDOWS:
         # Check for dependencies
         pass
@@ -53,7 +57,7 @@ def check_for_dependencies(operating_system):
     try:
         import torch
     except ImportError:
-        warnings.warn("PyTorch not found. Please install PyTorch. Visit PyTorch's website for installation instructions.")
+        warnings.warn("PyTorch not found. Please install PyTorch. Visit PyTorch website for installation instructions.")
         return False
     # Check if is cuda available
     if not torch.cuda.is_available():
@@ -94,6 +98,7 @@ def check_for_dependencies(operating_system):
     except ImportError:
         warnings.warn("Whisper not found. Please install Whisper with 'pip install git+https://github.com/openai/whisper.git'")
         return False
+    # TODO ollama
     
     return True
 
@@ -160,6 +165,19 @@ def main():
     else:
         device = sink_inputs[device_index - number_microphones]
         print(f"Application selected: {device['name']}, id: {device['id']}")
+        pyaudio_instance = pyaudio.PyAudio()
+        try:
+            source = pyaudio_instance.open(
+                format=pyaudio.paInt16,
+                channels=2,
+                rate=44100,
+                input=True,
+                input_device_index=int(device['id']),
+                frames_per_buffer=1024
+            )
+        except OSError as e:
+            print(f"Error: {e}")
+            return 1
     
     # The last time a recording was retrieved from the queue.
     phrase_time = None
@@ -174,6 +192,7 @@ def main():
     # Load transcriber model
     print("Loading model...")
     transcriber = Whisper(model_size="small.en")
+    translator = Llama_3_1_1B()
 
     record_timeout = 2 # TODO args.record_timeout
     phrase_timeout = 3 # TODO args.phrase_timeout
@@ -216,7 +235,7 @@ def main():
                     phrase_complete = True
                 # This is the last time we received new audio data from the queue.
                 phrase_time = now
-                
+
                 # Combine audio data from queue
                 audio_data = b''.join(data_queue.queue)
                 data_queue.queue.clear()
@@ -240,7 +259,8 @@ def main():
                 # Clear the console to reprint the updated transcription.
                 # os.system('cls' if os.name=='nt' else 'clear')
                 for line in transcription:
-                    print(line)
+                    translate_text = translator.translate(line)
+                    print(f"{line}\t\t{translate_text}")
                 # Flush stdout.
                 print('', end='', flush=True)
             else:
