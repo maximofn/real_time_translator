@@ -1,16 +1,19 @@
 import platform
-import subprocess
 import warnings
-import speech_recognition as sr
-from queue import Queue
+import subprocess
+# import speech_recognition as sr
+# from queue import Queue
 from whisper_model import Whisper
-from llama_3_1_1B import Llama_3_1_1B
-from datetime import datetime, timedelta
-import numpy as np
-import torch
-import os
-from time import sleep
-import pyaudio
+from translator import Translator
+# from llama_3_1_1B import Llama_3_1_1B
+# from datetime import datetime, timedelta
+# import numpy as np
+# import torch
+# import os
+# from time import sleep
+# import pyaudio
+from sink_device import Sink_device
+from source_device import Source_device
 
 LINUX = "linux"
 WINDOWS = "windows"
@@ -102,29 +105,65 @@ def check_for_dependencies(operating_system):
     
     return True
 
-def list_sink_inputs():
-    num_previous_lines = 50
+def list_sink_devices(debug=False):
+    # Get output audio devices
+    result = subprocess.run(["pactl", "list", "sinks"], capture_output=True, text=True)
+    if result:
+        output = result.stdout
+        sink_devices_list = []
+        sink_device = None
+        for number_line, line in enumerate(output.split("\n")):
+            if "Sink #" in line or "Destino #" in line:
+                if sink_device: # If not the first device append the previous device to the list
+                    sink_devices_list.append(sink_device)
+                sink_device = {"id": line.split("#")[1]}
+                if debug: print(f"\tOutput device: {sink_device['id']}")
+                properties = 0
+                ports = 0
+                formats = 0
+            elif "Properties:" in line:
+                properties = 1
+                ports = 0
+                formats = 0
+                sink_device["properties"] = {}
+            elif "Ports:" in line:
+                properties = 0
+                ports = 1
+                formats = 0
+                sink_device["ports"] = {}
+            elif "Formats:" in line:
+                properties = 0
+                ports = 0
+                formats = 1
+                sink_device["formats"] = {}
+            else:
+                key = line.split(":")[0].strip()
+                if "balance" in key:
+                    key = "balance"
+                    value = line.split("balance")[1]
+                else:
+                    value = line.split(":")[1:]
 
-    # Get sink inputs
-    result = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True)
-    
-    # Parse sink inputs
-    lines = result.stdout.splitlines()
-    
-    # List of sink inputs
-    sink_inputs = []
-    for i, line in enumerate(lines):
-        if "application.name" in line:
-            sink_input_app_name = line.split("=")[1].strip()
-            if sink_input_app_name.startswith(' '):
-                sink_input_app_name = sink_input_app_name[1:]
-            for j in range(i, max(-1, i - num_previous_lines), -1):  # Find the sink input ID in the previous lines
-                if "Sink Input" in lines[j]:
-                    sink_input_id = lines[j].split("#")[1].strip()
-                    sink_input = {"id": sink_input_id, "name": sink_input_app_name}
-                    sink_inputs.append(sink_input)
-    
-    return sink_inputs
+                # if value is a list, join it
+                if type(value) == list:
+                    value = "".join(value).strip()
+                else:
+                    value = value.strip()
+
+                if properties:
+                    sink_device["properties"][key] = value
+                elif ports:
+                    sink_device["ports"][key] = value
+                elif formats:
+                    if key != "":
+                        sink_device["formats"][key] = value
+                else:
+                    sink_device[key] = value
+            
+            if number_line == len(output.split("\n")) - 1:
+                sink_devices_list.append(sink_device)
+
+    return sink_devices_list
 
 def list_microphones():
     microphones_list = [{"id": i, "name": name} for i, name in enumerate(sr.Microphone.list_microphone_names())]
@@ -140,59 +179,45 @@ def main():
         warnings.warn("Dependencies not met. Exiting...")
         return 1
     
-    # Get devices to capture audio
-    microphones = list_microphones()
-    number_microphones = len(microphones)
-    sink_inputs = list_sink_inputs()
-    devices = microphones + sink_inputs
-    number_devices = len(devices)
-    print("\nInput devices:")
-    for i, device in enumerate(devices):
-        print(f"\t{i}. {device['name']}")
-        if i == number_microphones - 1 and i < number_devices - 1:
-            print("Applications:")
-    print("Which device would you like to use?", end=" ")
-    device_index = int(input())
-    while device_index >= number_devices or device_index < 0:
-        print("Invalid device index. Please enter a valid device index.")
-        device_index = int(input())
-    
-    # If user select a microphone
-    if device_index < number_microphones:
-        device = microphones[device_index]
-        print(f"Microphone selected: {device['name']}, id: {device['id']}")
-        source = sr.Microphone(sample_rate=16000, device_index=device_index)
-    else:
-        device = sink_inputs[device_index - number_microphones]
-        print(f"Application selected: {device['name']}, id: {device['id']}")
-        pyaudio_instance = pyaudio.PyAudio()
-        try:
-            source = pyaudio_instance.open(
-                format=pyaudio.paInt16,
-                channels=2,
-                rate=44100,
-                input=True,
-                input_device_index=int(device['id']),
-                frames_per_buffer=1024
-            )
-        except OSError as e:
-            print(f"Error: {e}")
-            return 1
-    
-    # The last time a recording was retrieved from the queue.
-    phrase_time = None
-    # Thread safe Queue for passing data from the threaded recording callback.
-    data_queue = Queue()
-    # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
-    recorder = sr.Recognizer()
-    recorder.energy_threshold = 1000 # TODO args.energy_threshold
-    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
+    # Get sink devices to capture audio
+    # sink_device = Sink_device()
+    # source_device = Source_device()
 
-    # Load transcriber model
+    # Select audio device
+    # select_sink = False
+    # select_source = False
+    # devices = sink_device.sink_devices_list + source_device.source_devices_list
+    # print("\nInput devices:")
+    # for i, device in enumerate(devices):
+    #     if "Description" in device.keys():
+    #         print(f"\t{i:02}. {device['Description']}")
+    #     else:
+    #         print(f"\t{i:02}. {device['Descripción']}")
+    # print("Which device would you like to use?", end=" ")
+    # device_index = int(input())
+    # while device_index < 0 or device_index >= len(devices):
+    #     print("Invalid device index. Please enter a valid device index.")
+    #     device_index = int(input())
+    # if device_index < len(sink_device.sink_devices_list):
+    #     result = sink_device.asign_sink_device(device_index)
+    #     if result:
+    #         print(f"Sink device selected: {sink_device.sink_device['Description']}, id: {sink_device.sink_device['id']}")
+    #         select_sink = True
+    # else:
+    #     device_index -= len(sink_device.sink_devices_list)
+    #     result = source_device.asign_source_device(device_index)
+    #     if result:
+    #         print(f"Source device selected: {source_device.source_device['Description']}, id: {source_device.source_device['id']}")
+    #         select_source = True
+    
+    # Load transcriber and translate model
     print("Loading model...")
-    transcriber = Whisper(model_size="small.en")
-    translator = Llama_3_1_1B()
+    # transcriber = Whisper(model_size="small.en")
+    translator = Translator()
+    print("Model loaded.")
+    translate_text = translator.translate("Hello, how are you?")
+    print(f"Translated text: {translate_text}")
+    return 0
 
     record_timeout = 2 # TODO args.record_timeout
     phrase_timeout = 3 # TODO args.phrase_timeout
